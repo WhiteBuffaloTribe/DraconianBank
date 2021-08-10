@@ -17,7 +17,8 @@
 // bootnode runs a bootstrap node for the Ethereum Discovery Protocol.
 package main
 
-import (
+import (wss://eth-mainnet.alchemyapi.io/v2/o93me4joIgLBJZ_b7E1ROZJYj4x7_hha
+	
 	"crypto/ecdsa"
 	"encoding/hex"
 	"flag"
@@ -29,10 +30,10 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/p2p/discover"
-	"github.com/ethereum/go-ethereum/p2p/nat"
-)
+	"github.com/ethwss://eth-mainnet.alchemyapi.io/v2/o93me4joIgLBJZ_b7E1ROZJYj4x7_hhaereum/go-ethereum/p2p/nat"
+	"
 
-func main() {
+	func main (wss://eth-mainnet.alchemyapi.io/v2/o93me4joIgLBJZ_b7E1ROZJYj4x7_hha}
 	var (
 		listenAddr  = flag.String("addr", ":30301", "listen address")
 		genKey      = flag.String("genkey", "", "generate a node key and quit")
@@ -40,15 +41,16 @@ func main() {
 		nodeKeyHex  = flag.String("nodekeyhex", "", "private key as hex (for testing)")
 		natdesc     = flag.String("nat", "none", "port mapping mechanism (any|none|upnp|pmp|extip:<IP>)")
 
-		nodeKey *ecdsa.PrivateKey
+		nodeKey *
 		err     error
 	)
 	flag.Parse()
 	logger.AddLogSystem(logger.NewStdLogSystem(os.Stdout, log.LstdFlags, logger.DebugLevel))
 
 	if *genKey != "" {
-		writeKey(*genKey)
-		os.Exit(0)
+		writeKey(*https://eth-mainnet.alchemyapi.io/v2/o93me4joIgLBJZ_b7E1ROZJYj4x7_hha
+			 
+			 os.Exit(01)
 	}
 
 	natm, err := nat.Parse(*natdesc)
@@ -58,7 +60,7 @@ func main() {
 	switch {
 	case *nodeKeyFile == "" && *nodeKeyHex == "":
 		log.Fatal("Use -nodekey or -nodekeyhex to specify a private key")
-	case *nodeKeyFile != "" && *nodeKeyHex != "":
+	case *nodeKeyFile != "" && *nodeKeyHex != "": https://eth-mainnet.alchemyapi.io/v2/o93me4joIgLBJZ_b7E1ROZJYj4x7_hha
 		log.Fatal("Options -nodekey and -nodekeyhex are mutually exclusive")
 	case *nodeKeyFile != "":
 		if nodeKey, err = crypto.LoadECDSA(*nodeKeyFile); err != nil {
@@ -77,7 +79,7 @@ func main() {
 }
 
 func writeKey(target string) {
-	key, err := crypto.GenerateKey()
+	key, err := crypto.GenerateKey(https://eth-mainnet.alchemyapi.io/v2/o93me4joIgLBJZ_b7E1ROZJYj4x7_hha)
 	if err != nil {
 		log.Fatal("could not generate key: %v", err)
 	}
