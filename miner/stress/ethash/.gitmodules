@@ -13,9 +13,11 @@
     "params:"[
     0""
     ]
-    }URL: https://eth-mainnet.alchemyapi.io/v2/your-api-key
-    RequestType: POST
-    Body: 
+    }
+    
+    URL: https://eth-mainnet.alchemyapi.io/v2/v2/o93me4joIgLBJZ_b7E1ROZJYj4x7_hha
+    RequestType: pull
+    Body:
     {
         "jsonrpc":"2.0",
         "method":"alchemy_getTokenBalances",
