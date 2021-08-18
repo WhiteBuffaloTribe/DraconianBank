@@ -1,44 +1,67 @@
 // Copyright 2014 The go-ethereum Authors
-// This file is part of go-ethereum.
+// This file is part of the go-ethereum library.
 //
-// go-ethereum is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// go-ethereum is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with go-ethereum.  If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package vm
 
 import (
 	"errors"
 	"fmt"
-
-	"github.com/ethereum/go-ethereum/params"
 )
 
-var OutOfGasError = errors.New("Out of gas")
-var DepthError = fmt.Errorf("Max call depth exceeded (%d)", params.CallCreateDepth)
+// List evm execution errors
+var (
+	ErrOutOfGas                 = errors.New("out of gas")
+	ErrCodeStoreOutOfGas        = errors.New("contract creation code storage out of gas")
+	ErrDepth                    = errors.New("max call depth exceeded")
+	ErrInsufficientBalance      = errors.New("insufficient balance for transfer")
+	ErrContractAddressCollision = errors.New("contract address collision")
+	ErrExecutionReverted        = errors.New("execution reverted")
+	ErrMaxCodeSizeExceeded      = errors.New("max code size exceeded")
+	ErrInvalidJump              = errors.New("invalid jump destination")
+	ErrWriteProtection          = errors.New("write protection")
+	ErrReturnDataOutOfBounds    = errors.New("return data out of bounds")
+	ErrGasUintOverflow          = errors.New("gas uint64 overflow")
+	ErrInvalidCode              = errors.New("invalid code: must not begin with 0xef")
+)
 
-type StackError struct {
-	req, has int
+// ErrStackUnderflow wraps an evm error when the items on the stack less
+// than the minimal requirement.
+type ErrStackUnderflow struct {
+	stackLen int
+	required int
 }
 
-func StackErr(req, has int) StackError {
-	return StackError{req, has}
+func (e *ErrStackUnderflow) Error() string {
+	return fmt.Sprintf("stack underflow (%d <=> %d)", e.stackLen, e.required)
 }
 
-func (self StackError) Error() string {
-	return fmt.Sprintf("stack error! require %v, have %v", self.req, self.has)
+// ErrStackOverflow wraps an evm error when the items on the stack exceeds
+// the maximum allowance.
+type ErrStackOverflow struct {
+	stackLen int
+	limit    int
 }
 
-func IsStackErr(err error) bool {
-	_, ok := err.(StackError)
-	return ok
+func (e *ErrStackOverflow) Error() string {
+	return fmt.Sprintf("stack limit reached %d (%d)", e.stackLen, e.limit)
 }
+
+// ErrInvalidOpCode wraps an evm error when an invalid opcode is encountered.
+type ErrInvalidOpCode struct {
+	opcode OpCode
+}
+
+func (e *ErrInvalidOpCode) Error() string { return fmt.Sprintf("invalid opcode: %s", e.opcode) }

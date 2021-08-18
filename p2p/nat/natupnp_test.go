@@ -1,18 +1,18 @@
 // Copyright 2015 The go-ethereum Authors
-// This file is part of go-ethereum.
+// This file is part of the go-ethereum library.
 //
-// go-ethereum is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// go-ethereum is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with go-ethereum.  If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package nat
 
@@ -21,6 +21,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -28,6 +30,10 @@ import (
 )
 
 func TestUPNP_DDWRT(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skipf("disabled to avoid firewall prompt")
+	}
+
 	dev := &fakeIGD{
 		t: t,
 		ssdpResp: "HTTP/1.1 200 OK\r\n" +
@@ -157,7 +163,11 @@ func TestUPNP_DDWRT(t *testing.T) {
 	// Attempt to discover the fake device.
 	discovered := discoverUPnP()
 	if discovered == nil {
-		t.Fatalf("not discovered")
+		if os.Getenv("CI") != "" {
+			t.Fatalf("not discovered")
+		} else {
+			t.Skipf("UPnP not discovered (known issue, see https://github.com/ethereum/go-ethereum/issues/21476)")
+		}
 	}
 	upnp, _ := discovered.(*upnp)
 	if upnp.service != "IGDv1-IP1" {
