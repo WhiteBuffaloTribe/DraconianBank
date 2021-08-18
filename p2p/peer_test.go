@@ -1,29 +1,36 @@
 // Copyright 2014 The go-ethereum Authors
-// This file is part of go-ethereum.
+// This file is part of the go-ethereum library.
 //
-// go-ethereum is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// go-ethereum is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with go-ethereum.  If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package p2p
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/rand"
 	"net"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/enr"
 )
 
 var discard = Protocol{
@@ -43,25 +50,68 @@ var discard = Protocol{
 	},
 }
 
-func testPeer(protos []Protocol) (func(), *conn, *Peer, <-chan DiscReason) {
-	fd1, fd2 := net.Pipe()
-	c1 := &conn{fd: fd1, transport: newTestTransport(randomID(), fd1)}
-	c2 := &conn{fd: fd2, transport: newTestTransport(randomID(), fd2)}
+// uintID encodes i into a node ID.
+func uintID(i uint16) enode.ID {
+	var id enode.ID
+	binary.BigEndian.PutUint16(id[:], i)
+	return id
+}
+
+// newNode creates a node record with the given address.
+func newNode(id enode.ID, addr string) *enode.Node {
+	var r enr.Record
+	if addr != "" {
+		// Set the port if present.
+		if strings.Contains(addr, ":") {
+			hs, ps, err := net.SplitHostPort(addr)
+			if err != nil {
+				panic(fmt.Errorf("invalid address %q", addr))
+			}
+			port, err := strconv.Atoi(ps)
+			if err != nil {
+				panic(fmt.Errorf("invalid port in %q", addr))
+			}
+			r.Set(enr.TCP(port))
+			r.Set(enr.UDP(port))
+			addr = hs
+		}
+		// Set the IP.
+		ip := net.ParseIP(addr)
+		if ip == nil {
+			panic(fmt.Errorf("invalid IP %q", addr))
+		}
+		r.Set(enr.IP(ip))
+	}
+	return enode.SignNull(&r, id)
+}
+
+func testPeer(protos []Protocol) (func(), *conn, *Peer, <-chan error) {
+	var (
+		fd1, fd2   = net.Pipe()
+		key1, key2 = newkey(), newkey()
+		t1         = newTestTransport(&key2.PublicKey, fd1, nil)
+		t2         = newTestTransport(&key1.PublicKey, fd2, &key1.PublicKey)
+	)
+
+	c1 := &conn{fd: fd1, node: newNode(uintID(1), ""), transport: t1}
+	c2 := &conn{fd: fd2, node: newNode(uintID(2), ""), transport: t2}
 	for _, p := range protos {
 		c1.caps = append(c1.caps, p.cap())
 		c2.caps = append(c2.caps, p.cap())
 	}
 
-	peer := newPeer(c1, protos)
-	errc := make(chan DiscReason, 1)
-	go func() { errc <- peer.run() }()
+	peer := newPeer(log.Root(), c1, protos)
+	errc := make(chan error, 1)
+	go func() {
+		_, err := peer.run()
+		errc <- err
+	}()
 
 	closer := func() { c2.close(errors.New("close func called")) }
 	return closer, c2, peer, errc
 }
 
 func TestPeerProtoReadMsg(t *testing.T) {
-	done := make(chan struct{})
 	proto := Protocol{
 		Name:   "a",
 		Length: 5,
@@ -75,7 +125,6 @@ func TestPeerProtoReadMsg(t *testing.T) {
 			if err := ExpectMsg(rw, 4, []uint{3}); err != nil {
 				t.Error(err)
 			}
-			close(done)
 			return nil
 		},
 	}
@@ -88,9 +137,10 @@ func TestPeerProtoReadMsg(t *testing.T) {
 	Send(rw, baseProtocolLength+4, []uint{3})
 
 	select {
-	case <-done:
 	case err := <-errc:
-		t.Errorf("peer returned: %v", err)
+		if err != errProtocolReturned {
+			t.Errorf("peer returned error: %v", err)
+		}
 	case <-time.After(2 * time.Second):
 		t.Errorf("receive timeout")
 	}
@@ -129,16 +179,19 @@ func TestPeerPing(t *testing.T) {
 	}
 }
 
+// This test checks that a disconnect message sent by a peer is returned
+// as the error from Peer.run.
 func TestPeerDisconnect(t *testing.T) {
 	closer, rw, _, disc := testPeer(nil)
 	defer closer()
+
 	if err := SendItems(rw, discMsg, DiscQuitting); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case reason := <-disc:
-		if reason != DiscRequested {
-			t.Errorf("run returned wrong reason: got %v, want %v", reason, DiscRequested)
+		if reason != DiscQuitting {
+			t.Errorf("run returned wrong reason: got %v, want %v", reason, DiscQuitting)
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Error("peer did not return")
@@ -148,7 +201,7 @@ func TestPeerDisconnect(t *testing.T) {
 // This test is supposed to verify that Peer can reliably handle
 // multiple causes of disconnection occurring at the same time.
 func TestPeerDisconnectRace(t *testing.T) {
-	maybe := func() bool { return rand.Intn(1) == 1 }
+	maybe := func() bool { return rand.Intn(2) == 1 }
 
 	for i := 0; i < 1000; i++ {
 		protoclose := make(chan error)
@@ -299,7 +352,7 @@ func TestMatchProtocols(t *testing.T) {
 			}
 		}
 		// Make sure no protocols missed negotiation
-		for name, _ := range tt.Match {
+		for name := range tt.Match {
 			if _, ok := result[name]; !ok {
 				t.Errorf("test %d, proto '%s': not negotiated, should have", i, name)
 				continue

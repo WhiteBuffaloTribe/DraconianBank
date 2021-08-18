@@ -1,208 +1,131 @@
 // Copyright 2014 The go-ethereum Authors
-// This file is part of go-ethereum.
+// This file is part of the go-ethereum library.
 //
-// go-ethereum is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// go-ethereum is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with go-ethereum.  If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
+// Package ethdb defines the interfaces for an Ethereum data store.
 package ethdb
 
-import (
-	"strconv"
-	"strings"
-	"time"
+import "io"
 
-	"github.com/ethereum/go-ethereum/compression/rle"
-	"github.com/ethereum/go-ethereum/logger"
-	"github.com/ethereum/go-ethereum/logger/glog"
-	"github.com/rcrowley/go-metrics"
-	"github.com/syndtr/goleveldb/leveldb"
-	"github.com/syndtr/goleveldb/leveldb/errors"
-	"github.com/syndtr/goleveldb/leveldb/iterator"
-	"github.com/syndtr/goleveldb/leveldb/opt"
-)
+// KeyValueReader wraps the Has and Get method of a backing data store.
+type KeyValueReader interface {
+	// Has retrieves if a key is present in the key-value data store.
+	Has(key []byte) (bool, error)
 
-var OpenFileLimit = 64
-
-type LDBDatabase struct {
-	fn string      // filename for reporting
-	db *leveldb.DB // LevelDB instance
-
-	GetTimer       metrics.Timer // Timer for measuring the database get request counts and latencies
-	PutTimer       metrics.Timer // Timer for measuring the database put request counts and latencies
-	DelTimer       metrics.Timer // Timer for measuring the database delete request counts and latencies
-	MissMeter      metrics.Meter // Meter for measuring the missed database get requests
-	ReadMeter      metrics.Meter // Meter for measuring the database get request data usage
-	WriteMeter     metrics.Meter // Meter for measuring the database put request data usage
-	CompTimeMeter  metrics.Meter // Meter for measuring the total time spent in database compaction
-	CompReadMeter  metrics.Meter // Meter for measuring the data read during compaction
-	CompWriteMeter metrics.Meter // Meter for measuring the data written during compaction
+	// Get retrieves the given key if it's present in the key-value data store.
+	Get(key []byte) ([]byte, error)
 }
 
-// NewLDBDatabase returns a LevelDB wrapped object. LDBDatabase does not persist data by
-// it self but requires a background poller which syncs every X. `Flush` should be called
-// when data needs to be stored and written to disk.
-func NewLDBDatabase(file string) (*LDBDatabase, error) {
-	// Open the db
-	db, err := leveldb.OpenFile(file, &opt.Options{OpenFilesCacheCapacity: OpenFileLimit})
-	// check for curruption and attempt to recover
-	if _, iscorrupted := err.(*errors.ErrCorrupted); iscorrupted {
-		db, err = leveldb.RecoverFile(file, nil)
-	}
-	// (re) check for errors and abort if opening of the db failed
-	if err != nil {
-		return nil, err
-	}
-	database := &LDBDatabase{
-		fn: file,
-		db: db,
-	}
-	go database.meter(3 * time.Second)
+// KeyValueWriter wraps the Put method of a backing data store.
+type KeyValueWriter interface {
+	// Put inserts the given value into the key-value data store.
+	Put(key []byte, value []byte) error
 
-	return database, nil
+	// Delete removes the key from the key-value data store.
+	Delete(key []byte) error
 }
 
-// Put puts the given key / value to the queue
-func (self *LDBDatabase) Put(key []byte, value []byte) error {
-	// Measure the database put latency, if requested
-	if self.PutTimer != nil {
-		defer self.PutTimer.UpdateSince(time.Now())
-	}
-	// Generate the data to write to disk, update the meter and write
-	dat := rle.Compress(value)
-
-	if self.WriteMeter != nil {
-		self.WriteMeter.Mark(int64(len(dat)))
-	}
-	return self.db.Put(key, dat, nil)
+// Stater wraps the Stat method of a backing data store.
+type Stater interface {
+	// Stat returns a particular internal stat of the database.
+	Stat(property string) (string, error)
 }
 
-// Get returns the given key if it's present.
-func (self *LDBDatabase) Get(key []byte) ([]byte, error) {
-	// Measure the database get latency, if requested
-	if self.GetTimer != nil {
-		defer self.GetTimer.UpdateSince(time.Now())
-	}
-	// Retrieve the key and increment the miss counter if not found
-	dat, err := self.db.Get(key, nil)
-	if err != nil {
-		if self.MissMeter != nil {
-			self.MissMeter.Mark(1)
-		}
-		return nil, err
-	}
-	// Otherwise update the actually retrieved amount of data
-	if self.ReadMeter != nil {
-		self.ReadMeter.Mark(int64(len(dat)))
-	}
-	return rle.Decompress(dat)
+// Compacter wraps the Compact method of a backing data store.
+type Compacter interface {
+	// Compact flattens the underlying data store for the given key range. In essence,
+	// deleted and overwritten versions are discarded, and the data is rearranged to
+	// reduce the cost of operations needed to access them.
+	//
+	// A nil start is treated as a key before all keys in the data store; a nil limit
+	// is treated as a key after all keys in the data store. If both is nil then it
+	// will compact entire data store.
+	Compact(start []byte, limit []byte) error
 }
 
-// Delete deletes the key from the queue and database
-func (self *LDBDatabase) Delete(key []byte) error {
-	// Measure the database delete latency, if requested
-	if self.DelTimer != nil {
-		defer self.DelTimer.UpdateSince(time.Now())
-	}
-	// Execute the actual operation
-	return self.db.Delete(key, nil)
+// KeyValueStore contains all the methods required to allow handling different
+// key-value data stores backing the high level database.
+type KeyValueStore interface {
+	KeyValueReader
+	KeyValueWriter
+	Batcher
+	Iteratee
+	Stater
+	Compacter
+	io.Closer
 }
 
-func (self *LDBDatabase) NewIterator() iterator.Iterator {
-	return self.db.NewIterator(nil, nil)
+// AncientReader contains the methods required to read from immutable ancient data.
+type AncientReader interface {
+	// HasAncient returns an indicator whether the specified data exists in the
+	// ancient store.
+	HasAncient(kind string, number uint64) (bool, error)
+
+	// Ancient retrieves an ancient binary blob from the append-only immutable files.
+	Ancient(kind string, number uint64) ([]byte, error)
+
+	// Ancients returns the ancient item numbers in the ancient store.
+	Ancients() (uint64, error)
+
+	// AncientSize returns the ancient size of the specified category.
+	AncientSize(kind string) (uint64, error)
 }
 
-// Flush flushes out the queue to leveldb
-func (self *LDBDatabase) Flush() error {
-	return nil
+// AncientWriter contains the methods required to write to immutable ancient data.
+type AncientWriter interface {
+	// AppendAncient injects all binary blobs belong to block at the end of the
+	// append-only immutable table files.
+	AppendAncient(number uint64, hash, header, body, receipt, td []byte) error
+
+	// TruncateAncients discards all but the first n ancient data from the ancient store.
+	TruncateAncients(n uint64) error
+
+	// Sync flushes all in-memory ancient store data to disk.
+	Sync() error
 }
 
-func (self *LDBDatabase) Close() {
-	if err := self.Flush(); err != nil {
-		glog.V(logger.Error).Infof("error: flush '%s': %v\n", self.fn, err)
-	}
-	self.db.Close()
-	glog.V(logger.Error).Infoln("flushed and closed db:", self.fn)
+// Reader contains the methods required to read data from both key-value as well as
+// immutable ancient data.
+type Reader interface {
+	KeyValueReader
+	AncientReader
 }
 
-func (self *LDBDatabase) LDB() *leveldb.DB {
-	return self.db
+// Writer contains the methods required to write data to both key-value as well as
+// immutable ancient data.
+type Writer interface {
+	KeyValueWriter
+	AncientWriter
 }
 
-// meter periodically retrieves internal leveldb counters and reports them to
-// the metrics subsystem.
-//
-// This is how a stats table look like (currently):
-//   Compactions
-//    Level |   Tables   |    Size(MB)   |    Time(sec)  |    Read(MB)   |   Write(MB)
-//   -------+------------+---------------+---------------+---------------+---------------
-//      0   |          0 |       0.00000 |       1.27969 |       0.00000 |      12.31098
-//      1   |         85 |     109.27913 |      28.09293 |     213.92493 |     214.26294
-//      2   |        523 |    1000.37159 |       7.26059 |      66.86342 |      66.77884
-//      3   |        570 |    1113.18458 |       0.00000 |       0.00000 |       0.00000
-func (self *LDBDatabase) meter(refresh time.Duration) {
-	// Create the counters to store current and previous values
-	counters := make([][]float64, 2)
-	for i := 0; i < 2; i++ {
-		counters[i] = make([]float64, 3)
-	}
-	// Iterate ad infinitum and collect the stats
-	for i := 1; ; i++ {
-		// Retrieve the database stats
-		stats, err := self.db.GetProperty("leveldb.stats")
-		if err != nil {
-			glog.V(logger.Error).Infof("failed to read database stats: %v", err)
-			return
-		}
-		// Find the compaction table, skip the header
-		lines := strings.Split(stats, "\n")
-		for len(lines) > 0 && strings.TrimSpace(lines[0]) != "Compactions" {
-			lines = lines[1:]
-		}
-		if len(lines) <= 3 {
-			glog.V(logger.Error).Infof("compaction table not found")
-			return
-		}
-		lines = lines[3:]
+// AncientStore contains all the methods required to allow handling different
+// ancient data stores backing immutable chain data store.
+type AncientStore interface {
+	AncientReader
+	AncientWriter
+	io.Closer
+}
 
-		// Iterate over all the table rows, and accumulate the entries
-		for j := 0; j < len(counters[i%2]); j++ {
-			counters[i%2][j] = 0
-		}
-		for _, line := range lines {
-			parts := strings.Split(line, "|")
-			if len(parts) != 6 {
-				break
-			}
-			for idx, counter := range parts[3:] {
-				if value, err := strconv.ParseFloat(strings.TrimSpace(counter), 64); err != nil {
-					glog.V(logger.Error).Infof("compaction entry parsing failed: %v", err)
-					return
-				} else {
-					counters[i%2][idx] += value
-				}
-			}
-		}
-		// Update all the requested meters
-		if self.CompTimeMeter != nil {
-			self.CompTimeMeter.Mark(int64((counters[i%2][0] - counters[(i-1)%2][0]) * 1000 * 1000 * 1000))
-		}
-		if self.CompReadMeter != nil {
-			self.CompReadMeter.Mark(int64((counters[i%2][1] - counters[(i-1)%2][1]) * 1024 * 1024))
-		}
-		if self.CompWriteMeter != nil {
-			self.CompWriteMeter.Mark(int64((counters[i%2][2] - counters[(i-1)%2][2]) * 1024 * 1024))
-		}
-		// Sleep a bit, then repeat the stats collection
-		time.Sleep(refresh)
-	}
+// Database contains all the methods required by the high level database to not
+// only access the key-value data store but also the chain freezer.
+type Database interface {
+	Reader
+	Writer
+	Batcher
+	Iteratee
+	Stater
+	Compacter
+	io.Closer
 }
